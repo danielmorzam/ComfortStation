@@ -1,0 +1,162 @@
+#include <DHT.h>
+#include <Arduino.h>
+#include <math.h>
+#include <SD.h>
+#include <OneWire.h>
+#include <DallasTemperature.h>
+#include <Wire.h>
+#include <RTClib.h>
+
+#define DHTPIN 2
+#define DHTTYPE DHT11
+#define analogPinForRV    2   
+#define analogPinForTMP   1
+#define CONFIG_THERMISTOR_ADC_PIN A0
+#define CONFIG_THERMISTOR_RESISTOR 9900l
+
+// GPIO where the DS18B20 is connected to
+const int oneWireBus = 7;     
+
+// Setup a oneWire instance to communicate with any OneWire devices
+OneWire oneWire(oneWireBus);
+
+// Pass our oneWire reference to Dallas Temperature sensor 
+DallasTemperature sensors(&oneWire);
+
+const float zeroWindAdjustment =  0.2; // negative numbers yield smaller wind speeds and vice versa.
+int TMP_Therm_ADunits2; 
+int TMP_Therm_ADunits;  //temp termistor value from wind sensor
+float RV_Wind_ADunits;    //RV output from wind sensor 
+float RV_Wind_Volts;
+unsigned long lastMillis;
+int TempCtimes100;
+float zeroWind_ADunits;
+float zeroWind_volts;
+float WindSpeed_MPH;
+
+int32_t thermistor_get_resistance(uint16_t adcval)
+{
+  
+  return (CONFIG_THERMISTOR_RESISTOR * ((1023.0 / adcval) - 1));
+}
+float thermistor_get_temperature(int32_t resistance)
+{
+  
+  float temp;
+    temp = log(resistance); 
+    temp = 1 / (0.001129148 + (0.000234125 * temp) + (0.0000000876741 * temp * temp * temp));  
+  return temp - 273.15;
+}
+
+DHT dht(DHTPIN, DHTTYPE);
+File myFile;
+
+// Declare a RTC DS3231
+RTC_DS3231 rtc;
+//DateTime = rtc.now();
+
+void setup() {
+ 
+    // Start the DS18B20 sensor
+  sensors.begin();
+   // Set serial
+  Serial.begin(9600);
+   dht.begin();
+  while (!Serial);
+   pinMode(8, OUTPUT);    // configure pin 8 as output
+   // We check if the RTC is connected
+    if (! rtc.begin()) {
+    Serial.println("No hay un módulo RTC");
+    while (1);    
+    }
+ // Set the time, only the first time, then comment and reload.
+ // Set the time with the values of the date and time in which the sketch has benn compiled.
+ // rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
+    
+   Serial.print("Starting SD ...");
+  if (!SD.begin(4)) {
+    Serial.println("Failed to start");
+    return;
+  }
+  Serial.println("Successful Initialisation");
+  myFile = SD.open("datalog.txt", FILE_WRITE);//Open file
+       Serial.println("Date, Time, DH11-HR(%), DH11-T(ºC), Wind(m/s), Globe(ºC)");
+       myFile.println("Date, Time, DH11-HR(%), DH11-T(ºC), Wind(m/s), Globe(ºC)");
+}
+
+void loop() {
+ myFile = SD.open("datalog.txt", FILE_WRITE);//File open
+  sensors.requestTemperatures(); 
+  float temperatureC = sensors.getTempCByIndex(0);
+  float temperatureF = sensors.getTempFByIndex(0);
+  float humedad = dht.readHumidity();
+  float temperatura = dht.readTemperature();
+
+  if (millis() - lastMillis > 200){      // read every 200 ms - printing slows this down further
+    TMP_Therm_ADunits = analogRead(analogPinForTMP);
+    RV_Wind_ADunits = analogRead(analogPinForRV);  
+    RV_Wind_Volts = (RV_Wind_ADunits *  0.0048828125);
+    TempCtimes100 = (0.005 *((float)TMP_Therm_ADunits * (float)TMP_Therm_ADunits)) - (16.862 * (float)TMP_Therm_ADunits) + 9575.4; //9075.4;  
+    zeroWind_ADunits = -0.0006*((float)TMP_Therm_ADunits * (float)TMP_Therm_ADunits) + 1.0727 * (float)TMP_Therm_ADunits + 47.172;  //  13.0C  553  482.39
+    zeroWind_volts = (1.10*zeroWind_ADunits * 0.0048828125) - zeroWindAdjustment;  
+    WindSpeed_MPH =  pow(((RV_Wind_Volts - zeroWind_volts) /.2300) , 2.7265);   
+    lastMillis = millis();    
+  } 
+  if (isnan(humedad) || isnan(temperatura)) {
+    Serial.println("Error reading the DHT11 sensor");
+    return;
+  }
+    delay(500);
+  digitalWrite(8, HIGH); // Set high pin in 8
+  delay(500);            // Hold 1 second
+  digitalWrite(8, LOW);  // Set low pin in 8
+
+  if (myFile) { 
+ DateTime now = rtc.now();
+ myFile.print(now.day());
+ myFile.print('/');
+ myFile.print(now.month());
+ myFile.print('/');
+ myFile.print(now.year());
+ myFile.print(", ");
+ myFile.print(now.hour());
+ myFile.print(':');
+ myFile.print(now.minute());
+ myFile.print(':');
+ myFile.print(now.second());
+myFile.print(", ");
+         myFile.print(millis());
+         myFile.print(", ");
+         myFile.print(humedad);
+         myFile.print(", ");
+         myFile.print(temperatura);
+         myFile.print(", ");
+         myFile.print((float)WindSpeed_MPH*0.44704);
+         myFile.print(", ");
+         myFile.println(temperatureC);
+         myFile.close(); //Close file
+        
+ Serial.print(now.day());
+ Serial.print('/');
+ Serial.print(now.month());
+ Serial.print('/');
+ Serial.print(now.year());
+Serial.print(", ");
+ Serial.print(now.hour());
+ Serial.print(':');
+ Serial.print(now.minute());
+ Serial.print(':');
+ Serial.print(now.second());
+Serial.print(", ");
+Serial.print(humedad);
+Serial.print(", ");
+Serial.print(temperatura);
+Serial.print(", ");
+Serial.print((float)WindSpeed_MPH*0.44704);
+Serial.print(", ");
+Serial.println(temperatureC); 
+  
+  } else {
+    Serial.println("Error al abrir el archivo");
+  }
+}
